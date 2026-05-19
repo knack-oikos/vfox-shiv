@@ -3,6 +3,7 @@
 local Errors = require("errors")
 local Paths = require("path")
 local Lock = require("lock")
+local Shell = require("shell")
 
 --- Installs a shiv package by delegating to shiv's install task.
 --- Bootstraps shiv if not already present.
@@ -28,17 +29,16 @@ function PLUGIN:BackendInstall(ctx)
     local shiv_path = ensure_shiv()
 
     -- Build the version/ref specifier for shiv install.
-    -- "latest" means no ref (track default branch).
-    -- Otherwise, mise strips 'v' prefixes from versions, so we add it back
-    -- since shiv tags use the 'v' prefix.
-    local tool_spec = tool
-    if version ~= "latest" then
-        local ref = version
-        if not version:match("^v") then
-            ref = "v" .. version
-        end
-        tool_spec = tool .. "@" .. ref
+    -- Mise resolves `@latest` to the newest listed tag before calling this
+    -- hook. Numeric versions are shiv tags with a restored `v` prefix; named
+    -- refs such as `main` are passed through for explicit branch tracking.
+    local ref = version
+    if version == "latest" then
+        ref = "latest"
+    elseif version:match("^%d") then
+        ref = "v" .. version
     end
+    local tool_spec = tool .. "@" .. ref
 
     -- Create isolated shiv environment pointing at mise's install_path
     local shiv_env = {
@@ -80,7 +80,9 @@ function sync_bundled_sources(shiv_path)
         or "https://raw.githubusercontent.com/KnickKnackLabs/shiv/main/sources.json"
     local target = shiv_path .. "/sources.json"
 
-    pcall(cmd.exec, "curl -sf --max-time 3 -o '" .. target .. "' '" .. sources_url .. "'")
+    -- Tests can set CURL=/path/to/mock because mise's vfox cmd.exec does not
+    -- preserve PATH overlays reliably.
+    pcall(cmd.exec, curl_command() .. " -sf --max-time 3 -o " .. Shell.quote(target) .. " " .. Shell.quote(sources_url))
 end
 
 --- Ensure the plugin's shiv clone exists and is at the pinned ref.
@@ -93,7 +95,7 @@ function ensure_shiv()
     local shiv_path = get_shiv_path()
 
     -- Pin to a specific shiv version for reproducibility
-    local shiv_ref = os.getenv("VFOX_SHIV_REF") or "v0.2.5"
+    local shiv_ref = os.getenv("VFOX_SHIV_REF") or "v0.2.8"
     local shiv_repo = os.getenv("VFOX_SHIV_REPO") or "https://github.com/KnickKnackLabs/shiv.git"
 
     if shiv_ready(shiv_path, shiv_ref) then
@@ -255,4 +257,10 @@ end
 --- @return string
 function get_shiv_path()
     return Paths.get_shiv_path()
+end
+
+--- Get shell-quoted curl command, honoring tests' CURL override.
+--- @return string
+function curl_command()
+    return Shell.command_from_env("CURL", "curl")
 end

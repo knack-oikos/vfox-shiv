@@ -79,7 +79,7 @@ shiv = "https://github.com/KnickKnackLabs/vfox-shiv"
   │
   ├─ BackendListVersions
   │    resolve "shimmer" → KnickKnackLabs/shimmer (via shiv sources)
-  │    list git tags → ["0.0.1-alpha", "latest"]
+  │    list git tags + branch pseudo-version → ["main", "0.0.1-alpha"]
   │
   ├─ BackendInstall
   │    ensure shiv is bootstrapped (pinned to ${shivRef})
@@ -102,16 +102,16 @@ shiv = "https://github.com/KnickKnackLabs/vfox-shiv"
         Version isolation comes from overriding shiv's path environment
         variables. Each version gets its own directory under mise's installs,
         so project A can pin <Code>shimmer@0.0.1-alpha</Code> while project B
-        tracks <Code>latest</Code>.
+        tracks the newest release with <Code>latest</Code>.
       </Paragraph>
     </Section>
 
     <Section title="Versions">
       <Paragraph>
         Git tags are listed as versions (<Code>v0.1.0</Code> →{" "}
-        <Code>0.1.0</Code>). A <Code>latest</Code> pseudo-version is always
-        available — it tracks the default branch, same as a bare{" "}
-        <Code>shiv install</Code>.
+        <Code>0.1.0</Code>). Mise's <Code>latest</Code> selector resolves to
+        the newest listed release tag. A <Code>main</Code> pseudo-version is
+        also listed for explicit default-branch tracking.
       </Paragraph>
 
       <CodeBlock lang="bash">{`# See available versions
@@ -120,8 +120,11 @@ mise ls-remote shiv:shimmer
 # Pin to a tag
 mise use shiv:shimmer@0.0.1-alpha
 
-# Track the default branch
-mise use shiv:shimmer@latest`}</CodeBlock>
+# Track the newest release
+mise use shiv:shimmer@latest
+
+# Track the default branch explicitly
+mise use shiv:shimmer@main`}</CodeBlock>
     </Section>
 
     <Section title="Configuration">

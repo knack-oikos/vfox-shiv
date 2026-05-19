@@ -58,7 +58,7 @@ else
 fi
 EOF
   chmod +x "$MOCK_BIN/curl"
-  export PATH="$MOCK_BIN:$PATH"
+  export CURL="$MOCK_BIN/curl"
 
   export VFOX_SHIV_SOURCES_URL="http://mock.local/sources.json"
   export VFOX_SHIV_CACHE_TTL=300
@@ -74,14 +74,14 @@ EOF
 @test "resolves package from remote sources" {
   run mise ls-remote shiv:remote-only-pkg
   [ "$status" -eq 0 ]
-  # remote-only-pkg has no tags, but should still have "latest"
-  echo "$output" | grep -q "latest"
+  # remote-only-pkg has no tags, but should still expose "main"
+  echo "$output" | grep -q "main"
 }
 
 @test "remote resolution also works for packages in bundled sources" {
   run mise ls-remote shiv:shimmer
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
 
 # ── Caching ───────────────────────────────────────────────────
@@ -107,7 +107,7 @@ EOF
   # Should still resolve remote-only-pkg from cache
   run mise ls-remote shiv:remote-only-pkg
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
 
 @test "refetches when cache exceeds TTL" {
@@ -121,7 +121,7 @@ EOF
   # Should refetch and find remote-only-pkg from mock server
   run mise ls-remote shiv:remote-only-pkg
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
 
 @test "cache file is updated after refetch" {
@@ -147,7 +147,7 @@ EOF
 
   run mise ls-remote shiv:shimmer
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
 
 @test "falls back to bundled sources when remote and user sources miss" {
@@ -157,7 +157,7 @@ EOF
   # shimmer should resolve from the bundled shiv sources.json
   run mise ls-remote shiv:shimmer
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
 
 @test "errors when package not found in any source" {
@@ -174,7 +174,7 @@ EOF
   # TTL is fine but content is garbage — should refetch
   run mise ls-remote shiv:remote-only-pkg
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
 
 @test "empty cache file triggers refetch" {
@@ -183,5 +183,5 @@ EOF
 
   run mise ls-remote shiv:remote-only-pkg
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "latest"
+  echo "$output" | grep -q "main"
 }
