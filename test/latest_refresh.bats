@@ -133,9 +133,6 @@ setup_latest_project() {
 [settings]
 experimental = true
 
-[plugins]
-shiv = "$PLUGIN_DIR"
-
 [tools]
 "shiv:moving" = "latest"
 MISE
