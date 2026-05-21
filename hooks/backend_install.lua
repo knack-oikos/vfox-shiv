@@ -180,17 +180,57 @@ function ensure_shiv()
     local mise_bin = find_mise()
     pcall(cmd.exec, shiv_mise_env() .. mise_bin .. " trust -q -C '" .. shiv_path .. "'")
 
-    -- Install shiv's runtime dependencies (gum).
-    -- This must succeed — shiv's tasks (install, update, etc.) require gum.
-    -- Unset GitHub token env vars to avoid inherited CI/GHE credentials
-    -- blocking anonymous github.com downloads.
-    local install_ok, install_err = pcall(cmd.exec,
-        "env -u GITHUB_TOKEN -u GH_TOKEN " .. shiv_mise_env() .. mise_bin .. " install -q -C '" .. shiv_path .. "'")
-    if not install_ok then
-        error("Failed to install shiv dependencies (gum): " .. tostring(install_err))
-    end
+    install_shiv_dependencies(shiv_path, mise_bin)
 
     return shiv_path
+end
+
+--- Install shiv's runtime dependencies.
+---
+--- Prefer the ambient GitHub token when present so GitHub Actions avoids
+--- anonymous API limits. If that token is invalid for github.com (for example
+--- a GHE token inherited from a parent environment), retry once with the token
+--- variables scrubbed.
+--- @param shiv_path string
+--- @param mise_bin string
+function install_shiv_dependencies(shiv_path, mise_bin)
+    local cmd = require("cmd")
+    local install_cmd = shiv_mise_env() .. mise_bin .. " install -q -C " .. Shell.quote(shiv_path)
+
+    local install_ok, install_err = pcall(cmd.exec, install_cmd)
+    if install_ok then
+        return
+    end
+
+    if github_token_env_present() then
+        local scrubbed_cmd = "env -u GITHUB_TOKEN -u GH_TOKEN " .. install_cmd
+        local scrubbed_ok, scrubbed_err = pcall(cmd.exec, scrubbed_cmd)
+        if scrubbed_ok then
+            return
+        end
+
+        error(
+            "Failed to install shiv dependencies (gum). " ..
+            "Attempt with inherited GitHub token failed: " .. Errors.clean_error(tostring(install_err)) ..
+            "\nRetry without GITHUB_TOKEN/GH_TOKEN also failed: " .. Errors.clean_error(tostring(scrubbed_err))
+        )
+    end
+
+    error("Failed to install shiv dependencies (gum): " .. Errors.clean_error(tostring(install_err)))
+end
+
+--- Return true when GitHub token env vars are present.
+--- @return boolean
+function github_token_env_present()
+    return env_present("GITHUB_TOKEN") or env_present("GH_TOKEN")
+end
+
+--- Return true when an env var is set to a non-empty value.
+--- @param name string
+--- @return boolean
+function env_present(name)
+    local value = os.getenv(name)
+    return value ~= nil and value ~= ""
 end
 
 --- Check whether the plugin-managed shiv clone exists at the desired ref.
