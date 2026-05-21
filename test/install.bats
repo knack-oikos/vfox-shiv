@@ -44,7 +44,7 @@ setup() {
   grep -q 'mise.*run' "$install_path/bin/readme"
 }
 
-@test "install latest (no ref) for untagged package" {
+@test "install latest release from config" {
   setup_mise_project '"shiv:readme" = "latest"'
 
   run mise install
@@ -55,7 +55,7 @@ setup() {
   [ -x "$install_path/bin/readme" ]
 }
 
-@test "install latest for tagged package" {
+@test "explicit latest install succeeds" {
   setup_mise_project '"shiv:readme" = "latest"'
 
   run mise install

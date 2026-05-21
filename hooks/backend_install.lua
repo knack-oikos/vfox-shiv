@@ -3,6 +3,7 @@
 local Errors = require("errors")
 local Paths = require("path")
 local Lock = require("lock")
+local Shell = require("shell")
 
 --- Installs a shiv package by delegating to shiv's install task.
 --- Bootstraps shiv if not already present.
@@ -28,17 +29,16 @@ function PLUGIN:BackendInstall(ctx)
     local shiv_path = ensure_shiv()
 
     -- Build the version/ref specifier for shiv install.
-    -- "latest" means no ref (track default branch).
-    -- Otherwise, mise strips 'v' prefixes from versions, so we add it back
-    -- since shiv tags use the 'v' prefix.
-    local tool_spec = tool
-    if version ~= "latest" then
-        local ref = version
-        if not version:match("^v") then
-            ref = "v" .. version
-        end
-        tool_spec = tool .. "@" .. ref
+    -- Mise resolves `@latest` to the newest listed tag before calling this
+    -- hook. Numeric versions are shiv tags with a restored `v` prefix; named
+    -- refs such as `main` are passed through for explicit branch tracking.
+    local ref = version
+    if version == "latest" then
+        ref = "latest"
+    elseif version:match("^%d") then
+        ref = "v" .. version
     end
+    local tool_spec = tool .. "@" .. ref
 
     -- Create isolated shiv environment pointing at mise's install_path
     local shiv_env = {
@@ -80,7 +80,9 @@ function sync_bundled_sources(shiv_path)
         or "https://raw.githubusercontent.com/KnickKnackLabs/shiv/main/sources.json"
     local target = shiv_path .. "/sources.json"
 
-    pcall(cmd.exec, "curl -sf --max-time 3 -o '" .. target .. "' '" .. sources_url .. "'")
+    -- Tests can set CURL=/path/to/mock because mise's vfox cmd.exec does not
+    -- preserve PATH overlays reliably.
+    pcall(cmd.exec, curl_command() .. " -sf --max-time 3 -o " .. Shell.quote(target) .. " " .. Shell.quote(sources_url))
 end
 
 --- Ensure the plugin's shiv clone exists and is at the pinned ref.
@@ -93,7 +95,7 @@ function ensure_shiv()
     local shiv_path = get_shiv_path()
 
     -- Pin to a specific shiv version for reproducibility
-    local shiv_ref = os.getenv("VFOX_SHIV_REF") or "v0.2.5"
+    local shiv_ref = os.getenv("VFOX_SHIV_REF") or "v0.2.8"
     local shiv_repo = os.getenv("VFOX_SHIV_REPO") or "https://github.com/KnickKnackLabs/shiv.git"
 
     if shiv_ready(shiv_path, shiv_ref) then
@@ -178,17 +180,57 @@ function ensure_shiv()
     local mise_bin = find_mise()
     pcall(cmd.exec, shiv_mise_env() .. mise_bin .. " trust -q -C '" .. shiv_path .. "'")
 
-    -- Install shiv's runtime dependencies (gum).
-    -- This must succeed — shiv's tasks (install, update, etc.) require gum.
-    -- Unset GitHub token env vars to avoid inherited CI/GHE credentials
-    -- blocking anonymous github.com downloads.
-    local install_ok, install_err = pcall(cmd.exec,
-        "env -u GITHUB_TOKEN -u GH_TOKEN " .. shiv_mise_env() .. mise_bin .. " install -q -C '" .. shiv_path .. "'")
-    if not install_ok then
-        error("Failed to install shiv dependencies (gum): " .. tostring(install_err))
-    end
+    install_shiv_dependencies(shiv_path, mise_bin)
 
     return shiv_path
+end
+
+--- Install shiv's runtime dependencies.
+---
+--- Prefer the ambient GitHub token when present so GitHub Actions avoids
+--- anonymous API limits. If that token is invalid for github.com (for example
+--- a GHE token inherited from a parent environment), retry once with the token
+--- variables scrubbed.
+--- @param shiv_path string
+--- @param mise_bin string
+function install_shiv_dependencies(shiv_path, mise_bin)
+    local cmd = require("cmd")
+    local install_cmd = shiv_mise_env() .. mise_bin .. " install -q -C " .. Shell.quote(shiv_path)
+
+    local install_ok, install_err = pcall(cmd.exec, install_cmd)
+    if install_ok then
+        return
+    end
+
+    if github_token_env_present() then
+        local scrubbed_cmd = "env -u GITHUB_TOKEN -u GH_TOKEN " .. install_cmd
+        local scrubbed_ok, scrubbed_err = pcall(cmd.exec, scrubbed_cmd)
+        if scrubbed_ok then
+            return
+        end
+
+        error(
+            "Failed to install shiv dependencies (gum). " ..
+            "Attempt with inherited GitHub token failed: " .. Errors.clean_error(tostring(install_err)) ..
+            "\nRetry without GITHUB_TOKEN/GH_TOKEN also failed: " .. Errors.clean_error(tostring(scrubbed_err))
+        )
+    end
+
+    error("Failed to install shiv dependencies (gum): " .. Errors.clean_error(tostring(install_err)))
+end
+
+--- Return true when GitHub token env vars are present.
+--- @return boolean
+function github_token_env_present()
+    return env_present("GITHUB_TOKEN") or env_present("GH_TOKEN")
+end
+
+--- Return true when an env var is set to a non-empty value.
+--- @param name string
+--- @return boolean
+function env_present(name)
+    local value = os.getenv(name)
+    return value ~= nil and value ~= ""
 end
 
 --- Check whether the plugin-managed shiv clone exists at the desired ref.
@@ -255,4 +297,10 @@ end
 --- @return string
 function get_shiv_path()
     return Paths.get_shiv_path()
+end
+
+--- Get shell-quoted curl command, honoring tests' CURL override.
+--- @return string
+function curl_command()
+    return Shell.command_from_env("CURL", "curl")
 end

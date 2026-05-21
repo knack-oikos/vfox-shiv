@@ -2,6 +2,7 @@
 -- package.path, so require("name") loads lib/name.lua. See
 -- jdx/mise crates/vfox/src/plugin.rs (set_paths).
 local Paths = require("path")
+local Shell = require("shell")
 
 --- Lists available versions (git tags) for a shiv package.
 --- Resolves tool name to a GitHub repo via shiv's source files,
@@ -25,10 +26,12 @@ function PLUGIN:BackendListVersions(ctx)
 
     -- List tags via GitHub API using curl.
     -- curl is always available; gh may not be on PATH inside mise's Lua sandbox.
+    -- Tests can set CURL=/path/to/mock because mise's vfox cmd.exec does not
+    -- preserve PATH overlays reliably.
     -- Pass GITHUB_TOKEN for auth if available (avoids rate limits in CI).
     local versions = {}
+    table.insert(versions, "main")
     if os.getenv("VFOX_SHIV_SKIP_TAG_FETCH") == "1" then
-        table.insert(versions, "latest")
         return { versions = versions }
     end
     local auth_header = ""
@@ -38,28 +41,29 @@ function PLUGIN:BackendListVersions(ctx)
         -- print credentials. The shell expands the environment variable.
         auth_header = [[-H "Authorization: token ${GITHUB_TOKEN:-$GH_TOKEN}" ]]
     end
+    local tags_url = "https://api.github.com/repos/" .. repo .. "/tags"
     local ok, output = pcall(cmd.exec,
-        "curl -sf --max-time 10 " .. auth_header .. "https://api.github.com/repos/" .. repo .. "/tags | jq -r '.[].name' 2>/dev/null")
+        curl_command() .. " -sf --max-time 10 " .. auth_header .. Shell.quote(tags_url))
     if ok and output and output ~= "" then
-        -- Parse tags into version list
+        -- Parse tag names in Lua instead of piping through jq so tests can
+        -- inject CURL without also depending on the command environment's PATH.
         local tags = {}
-        for tag in output:gmatch("[^\n]+") do
+        for tag in output:gmatch('"name"%s*:%s*"([^"]+)"') do
             -- Strip leading 'v' prefix for mise's version model
             local version = tag:gsub("^v", "")
             table.insert(tags, version)
         end
 
-        -- Reverse so oldest is first (mise expects ascending order)
+        -- Reverse so oldest is first (GitHub returns newest first; mise expects ascending order)
         for i = #tags, 1, -1 do
             table.insert(versions, tags[i])
         end
     end
 
-    -- Always include "latest" as a pseudo-version.
-    -- When BackendInstall sees this, it installs without a ref
-    -- (tracking the default branch, same as bare `shiv install <tool>`).
-    table.insert(versions, "latest")
-
+    -- Do not append a literal "latest" version here. Mise treats `@latest` as
+    -- a selector for the newest listed version; exposing "latest" as a real
+    -- backend version can make stale concrete installs keep winning resolution.
+    -- `main` is the explicit branch-tracking pseudo-version.
     return { versions = versions }
 end
 
@@ -132,7 +136,7 @@ function get_cached_remote_sources()
     -- NOTE: http.get cannot be wrapped in pcall due to mise's Lua coroutine sandbox
     -- ("attempt to yield across metamethod/C-call boundary"). Use curl instead.
     local sources_url = get_sources_url()
-    local ok, body = pcall(cmd.exec, "curl -sf --max-time 3 '" .. sources_url .. "'")
+    local ok, body = pcall(cmd.exec, curl_command() .. " -sf --max-time 3 " .. Shell.quote(sources_url))
 
     if ok and body and body ~= "" then
         local parse_ok, parsed = pcall(json.decode, body)
@@ -162,13 +166,20 @@ end
 --- @param tool string
 --- @return string|nil
 function lookup_in_source(file_path, tool)
-    local cmd = require("cmd")
-    local ok, result = pcall(cmd.exec, "jq -r --arg n '" .. tool .. "' '.[$n] // empty' '" .. file_path .. "' 2>/dev/null")
-    if ok and result and result ~= "" then
-        local cleaned = result:gsub("%s+$", "")
-        return cleaned
+    local file = require("file")
+    local json = require("json")
+
+    local ok, data = pcall(file.read, file_path)
+    if not ok or not data or data == "" then
+        return nil
     end
-    return nil
+
+    local parse_ok, parsed = pcall(json.decode, data)
+    if not parse_ok or not parsed then
+        return nil
+    end
+
+    return lookup_in_table(parsed, tool)
 end
 
 --- Get the age of a file in seconds.
@@ -211,7 +222,7 @@ function write_cache(path, url)
     if dir then
         pcall(cmd.exec, "mkdir -p '" .. dir .. "'")
     end
-    pcall(cmd.exec, "curl -sf --max-time 3 -o '" .. path .. "' '" .. url .. "'")
+    pcall(cmd.exec, curl_command() .. " -sf --max-time 3 -o " .. Shell.quote(path) .. " " .. Shell.quote(url))
 end
 
 --- Get the remote sources URL.
@@ -226,4 +237,10 @@ end
 --- @return string
 function get_shiv_path()
     return Paths.get_shiv_path()
+end
+
+--- Get shell-quoted curl command, honoring tests' CURL override.
+--- @return string
+function curl_command()
+    return Shell.command_from_env("CURL", "curl")
 end
