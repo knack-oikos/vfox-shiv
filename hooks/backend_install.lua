@@ -28,18 +28,6 @@ function PLUGIN:BackendInstall(ctx)
     -- Ensure shiv is bootstrapped
     local shiv_path = ensure_shiv()
 
-    -- Build the version/ref specifier for shiv install.
-    -- Mise resolves `@latest` to the newest listed tag before calling this
-    -- hook. Numeric versions are shiv tags with a restored `v` prefix; named
-    -- refs such as `main` are passed through for explicit branch tracking.
-    local ref = version
-    if version == "latest" then
-        ref = "latest"
-    elseif version:match("^%d") then
-        ref = "v" .. version
-    end
-    local tool_spec = tool .. "@" .. ref
-
     -- Create isolated shiv environment pointing at mise's install_path
     local shiv_env = {
         SHIV_PACKAGES_DIR = install_path .. "/packages",
@@ -66,6 +54,9 @@ function PLUGIN:BackendInstall(ctx)
         -- same bundled sources.json file.
         sync_bundled_sources(shiv_path)
 
+        local ref = resolve_install_ref(tool, version, shiv_path)
+        local tool_spec = tool .. "@" .. ref
+
         -- Delegate to shiv install via mise. The outer exec provides shiv's
         -- already-installed runtime tools on PATH; the inner run skips another
         -- auto-install/symlink rebuild for those tools.
@@ -83,6 +74,152 @@ function PLUGIN:BackendInstall(ctx)
     end)
 
     return {}
+end
+
+--- Resolve the ref passed to shiv install.
+---
+--- Normally mise resolves selectors before BackendInstall, so a minor-stream
+--- pin such as `0.3` arrives here as `0.3.1`. GitHub macOS runners with mise
+--- 2026.6.0 have been observed passing the raw partial version through. Make
+--- install robust by resolving numeric partials here too.
+--- @param tool string
+--- @param version string
+--- @param shiv_path string
+--- @return string
+function resolve_install_ref(tool, version, shiv_path)
+    if version == "latest" or version == "main" then
+        return version
+    end
+    if version:match("^%d") then
+        return "v" .. resolve_numeric_version(tool, version, shiv_path)
+    end
+    return version
+end
+
+--- Resolve a numeric partial version to the newest matching release version.
+--- @param tool string
+--- @param version string
+--- @param shiv_path string
+--- @return string
+function resolve_numeric_version(tool, version, shiv_path)
+    -- Exact patch/pre-release pins already point at one concrete tag.
+    if not (version:match("^%d+$") or version:match("^%d+%.%d+$")) then
+        return version
+    end
+
+    local versions = list_install_versions(tool, shiv_path)
+    local prefix = version .. "."
+    local matches = {}
+    for _, candidate in ipairs(versions) do
+        if candidate:sub(1, #prefix) == prefix then
+            table.insert(matches, candidate)
+        end
+    end
+
+    if #matches == 0 then
+        return version
+    end
+
+    table.sort(matches, semver_less)
+    return matches[#matches]
+end
+
+--- List release versions for install-time fallback resolution.
+--- @param tool string
+--- @param shiv_path string
+--- @return table
+function list_install_versions(tool, shiv_path)
+    local cmd = require("cmd")
+    local repo = resolve_install_repo(tool, shiv_path)
+    if not repo then
+        return {}
+    end
+
+    local auth_header = ""
+    local gh_token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
+    if gh_token ~= "" then
+        auth_header = [[-H "Authorization: token ${GITHUB_TOKEN:-$GH_TOKEN}" ]]
+    end
+
+    local tags_url = "https://api.github.com/repos/" .. repo .. "/tags"
+    local ok, output = pcall(cmd.exec,
+        curl_command() .. " -sf --max-time 10 " .. auth_header .. Shell.quote(tags_url))
+    local versions = {}
+    if ok and output and output ~= "" then
+        for tag in output:gmatch('"name"%s*:%s*"([^"]+)"') do
+            local version = tag:gsub("^v", "")
+            table.insert(versions, version)
+        end
+    end
+    return versions
+end
+
+--- Resolve a shiv package name to a GitHub repo for install-time fallback.
+--- @param tool string
+--- @param shiv_path string
+--- @return string|nil
+function resolve_install_repo(tool, shiv_path)
+    local cmd = require("cmd")
+    local sources_dir = os.getenv("SHIV_SOURCES_DIR")
+        or os.getenv("XDG_CONFIG_HOME") and (os.getenv("XDG_CONFIG_HOME") .. "/shiv/sources")
+        or ((os.getenv("HOME") or "") .. "/.config/shiv/sources")
+
+    local ok, listing = pcall(cmd.exec, "ls " .. Shell.quote(sources_dir) .. "/*.json 2>/dev/null")
+    if ok and listing and listing ~= "" then
+        for file_path in listing:gmatch("[^\n]+") do
+            local repo = lookup_install_source(file_path, tool)
+            if repo then return repo end
+        end
+    end
+
+    return lookup_install_source(shiv_path .. "/sources.json", tool)
+end
+
+--- Look up a package in a simple shiv sources JSON file.
+--- @param file_path string
+--- @param tool string
+--- @return string|nil
+function lookup_install_source(file_path, tool)
+    local file = require("file")
+    local ok, data = pcall(file.read, file_path)
+    if not ok or not data or data == "" then
+        return nil
+    end
+    for key, repo in data:gmatch('"([^"]+)"%s*:%s*"([^"]+)"') do
+        if key == tool and repo ~= "" then
+            return repo
+        end
+    end
+    return nil
+end
+
+--- Return true when version a sorts before version b.
+--- @param a string
+--- @param b string
+--- @return boolean
+function semver_less(a, b)
+    local an = numeric_parts(a)
+    local bn = numeric_parts(b)
+    for i = 1, 3 do
+        local av = an[i] or 0
+        local bv = bn[i] or 0
+        if av ~= bv then
+            return av < bv
+        end
+    end
+    return a < b
+end
+
+--- Return numeric version components.
+--- @param version string
+--- @return table
+function numeric_parts(version)
+    local parts = {}
+    for part in version:gmatch("%d+") do
+        table.insert(parts, tonumber(part) or 0)
+        if #parts == 3 then break end
+    end
+    return parts
 end
 
 --- Run a callback under a directory lock, reclaiming dead-holder locks.

@@ -170,6 +170,26 @@ MISE
   [[ "$output" == */shiv-moving/main ]]
 }
 
+@test "install resolves raw minor stream when mise passes it through" {
+  cat > "$PROJECT_DIR/mise.toml" <<MISE
+[settings]
+experimental = true
+
+[tools]
+"shiv:moving" = "0.9"
+MISE
+  mise trust "$PROJECT_DIR/mise.toml" 2>/dev/null
+
+  (
+    cd "$PROJECT_DIR"
+    env -u GITHUB_TOKEN -u GH_TOKEN VFOX_SHIV_SKIP_TAG_FETCH=1 mise install
+  )
+
+  run tail -n 1 "$VFOX_SHIV_INSTALL_LOG"
+  [ "$status" -eq 0 ]
+  [ "$output" = "moving@v0.9.3" ]
+}
+
 @test "explicit latest install does not stay on an older concrete install" {
   (
     cd "$PROJECT_DIR"
