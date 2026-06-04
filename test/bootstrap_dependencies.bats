@@ -119,3 +119,34 @@ print(err)
   line_count="$(wc -l < "$LAST_EXEC_LOG" | tr -d ' ')"
   [ "$line_count" -eq 1 ]
 }
+
+@test "with_lock acquires and releases around callback" {
+  run_dependency_lua '
+with_lock("/tmp/vfox-shiv-install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function()
+  print("inside lock")
+end)
+' VFOX_TEST_LOCK_MAX_ATTEMPTS=1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"inside lock"* ]]
+  grep -q "mkdir -p '/tmp'" "$LAST_EXEC_LOG"
+  grep -q "mkdir '/tmp/vfox-shiv-install.lock'" "$LAST_EXEC_LOG"
+  grep -q "echo \$PPID > '/tmp/vfox-shiv-install.lock/pid'" "$LAST_EXEC_LOG"
+  grep -q "rm -rf '/tmp/vfox-shiv-install.lock'" "$LAST_EXEC_LOG"
+}
+
+@test "with_lock releases after callback failure" {
+  run_dependency_lua '
+local ok, err = pcall(function()
+  with_lock("/tmp/vfox-shiv-install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function()
+    error("boom")
+  end)
+end)
+if ok then
+  error("expected lock callback to fail")
+end
+print(err)
+' VFOX_TEST_LOCK_MAX_ATTEMPTS=1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"boom"* ]]
+  grep -q "rm -rf '/tmp/vfox-shiv-install.lock'" "$LAST_EXEC_LOG"
+}

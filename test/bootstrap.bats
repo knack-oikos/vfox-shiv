@@ -25,6 +25,11 @@ setup() {
   [ -f "$shiv_path/sources.json" ]
 }
 
+@test "bootstrapped shiv has runtime dependency marker" {
+  local shiv_path="${VFOX_SHIV_PATH:-$HOME/.local/share/mise/shiv-backend/shiv}"
+  [ -f "$shiv_path/.vfox-shiv-deps-ready" ]
+}
+
 # Isolated mise invocation helper for the lock tests below. Uses a fresh
 # MISE_DATA_DIR (plugin/backend state) and MISE_CONFIG_DIR (skip the
 # user's global config — otherwise ~/.config/mise/config.toml tools drag

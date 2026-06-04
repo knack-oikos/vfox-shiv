@@ -54,19 +54,78 @@ function PLUGIN:BackendInstall(ctx)
         env_prefix = env_prefix .. k .. "='" .. v .. "' "
     end
 
-    -- Sync remote sources.json into bundled shiv so it knows about new packages
-    sync_bundled_sources(shiv_path)
+    -- Multiple shiv:* tools can be installed in parallel by one `mise install`.
+    -- The delegated shiv task may itself run nested `mise install` for package
+    -- dependencies. On macOS mise 2026.6.0, repeated/concurrent nested installs
+    -- can race or fail while rebuilding runtime symlinks. Serialize this shared
+    -- delegated phase while keeping each package's SHIV_* install paths isolated.
+    local install_lock_path = shiv_path .. ".install.lock"
+    with_lock(install_lock_path, "VFOX_SHIV_INSTALL_LOCK_MAX_ATTEMPTS", "shiv package install", function()
+        -- Sync remote sources.json into bundled shiv so it knows about new packages.
+        -- Keep this inside the install lock because every package install writes the
+        -- same bundled sources.json file.
+        sync_bundled_sources(shiv_path)
 
-    -- Delegate to shiv install via mise run
-    local mise_bin = find_mise()
-    local install_cmd = env_prefix .. shiv_mise_env() .. mise_bin .. " -C '" .. shiv_path .. "' run -q install " .. tool_spec
+        -- Delegate to shiv install via mise. The outer exec provides shiv's
+        -- already-installed runtime tools on PATH; the inner run skips another
+        -- auto-install/symlink rebuild for those tools.
+        local mise_bin = find_mise()
+        local quoted_mise = Shell.quote(mise_bin)
+        local quoted_shiv_path = Shell.quote(shiv_path)
+        local install_cmd = env_prefix .. shiv_mise_env() .. quoted_mise .. " -C " .. quoted_shiv_path ..
+            " exec --no-deps -- " .. quoted_mise .. " -C " .. quoted_shiv_path ..
+            " run --skip-tools -q install " .. Shell.quote(tool_spec)
 
-    local ok, result = pcall(cmd.exec, install_cmd)
-    if not ok then
-        error("shiv install failed for " .. tool_spec .. ": " .. Errors.clean_error(tostring(result)))
-    end
+        local ok, result = pcall(cmd.exec, install_cmd)
+        if not ok then
+            error("shiv install failed for " .. tool_spec .. ": " .. Errors.clean_error(tostring(result)))
+        end
+    end)
 
     return {}
+end
+
+--- Run a callback under a directory lock, reclaiming dead-holder locks.
+--- @param lock_path string
+--- @param max_attempts_env string
+--- @param lock_name string
+--- @param callback function
+function with_lock(lock_path, max_attempts_env, lock_name, callback)
+    local cmd = require("cmd")
+    local parent_dir = lock_path:match("(.+)/[^/]+$")
+    if parent_dir then
+        pcall(cmd.exec, "mkdir -p " .. Shell.quote(parent_dir))
+    end
+
+    local max_attempts = tonumber(os.getenv(max_attempts_env) or "120") or 120
+    local got_lock = false
+    for _ = 1, max_attempts do
+        local state = Lock.try_acquire(lock_path)
+        if state == "acquired" then
+            got_lock = true
+            break
+        end
+        if state == "stale" then
+            Lock.reclaim(lock_path)
+        else
+            pcall(cmd.exec, "sleep 0.5")
+        end
+    end
+
+    if not got_lock then
+        error(
+            "Timed out waiting for " .. lock_name .. " lock at " .. lock_path ..
+            ".\nIf no other mise install is running, remove the stale lock:\n" ..
+            "  rm -rf " .. Shell.quote(lock_path)
+        )
+    end
+
+    local ok, result = pcall(callback)
+    Lock.release(lock_path)
+    if not ok then
+        error(result)
+    end
+    return result
 end
 
 --- Sync the bundled shiv's sources.json with the remote version.
@@ -98,11 +157,11 @@ function ensure_shiv()
     local shiv_ref = os.getenv("VFOX_SHIV_REF") or "v0.2.8"
     local shiv_repo = os.getenv("VFOX_SHIV_REPO") or "https://github.com/KnickKnackLabs/shiv.git"
 
-    if shiv_ready(shiv_path, shiv_ref) then
+    if shiv_bootstrap_ready(shiv_path, shiv_ref) then
         return shiv_path
     end
 
-    -- Bootstrap: clone shiv at the pinned ref.
+    -- Bootstrap: clone shiv at the pinned ref and install its runtime deps.
     -- Multiple shiv:* tools may try to bootstrap simultaneously via
     -- parallel mise install. Use mkdir as an atomic lock, with PID-based
     -- staleness detection (see lib/lock.lua) so a crashed mise session
@@ -113,16 +172,16 @@ function ensure_shiv()
         pcall(cmd.exec, "mkdir -p '" .. parent_dir .. "'")
     end
 
-    -- Retry budget: 30 × 0.5s = 15s. A shallow clone of shiv takes <5s on
-    -- a normal network; 15s is generous for a legitimate concurrent
-    -- bootstrap and fast enough that users don't wonder if mise hung.
+    -- Retry budget: 30 × 0.5s = 15s. A shallow clone of shiv plus gum install
+    -- takes <10s on a normal network; 15s is generous for a legitimate
+    -- concurrent bootstrap and fast enough that users don't wonder if mise hung.
     -- Override for tests via VFOX_SHIV_LOCK_MAX_ATTEMPTS.
     local max_attempts = tonumber(os.getenv("VFOX_SHIV_LOCK_MAX_ATTEMPTS") or "30") or 30
 
     local got_lock = false
     for _ = 1, max_attempts do
         -- Check if another installer already finished
-        if shiv_ready(shiv_path, shiv_ref) then
+        if shiv_bootstrap_ready(shiv_path, shiv_ref) then
             return shiv_path
         end
         local state = Lock.try_acquire(lock_path)
@@ -141,7 +200,7 @@ function ensure_shiv()
 
     if not got_lock then
         -- Final check before giving up
-        if shiv_ready(shiv_path, shiv_ref) then
+        if shiv_bootstrap_ready(shiv_path, shiv_ref) then
             return shiv_path
         end
         error(
@@ -152,12 +211,13 @@ function ensure_shiv()
     end
 
     -- We hold the lock. Re-check in case someone finished just before us.
-    if shiv_ready(shiv_path, shiv_ref) then
+    if shiv_bootstrap_ready(shiv_path, shiv_ref) then
         Lock.release(lock_path)
         return shiv_path
     end
 
-    -- The plugin owns this clone. If the pinned ref changed, replace the old
+    -- The plugin owns this clone. If the pinned ref changed, or if a previous
+    -- bootstrap died before writing the dependency-ready marker, replace the old
     -- bootstrap so existing users pick up shiv fixes without manual cleanup.
     if file.exists(shiv_path .. "/.git/HEAD") then
         pcall(cmd.exec, "rm -rf '" .. shiv_path .. "'")
@@ -168,9 +228,8 @@ function ensure_shiv()
         .. shiv_repo .. " '" .. shiv_path .. "'"
 
     local ok, result = pcall(cmd.exec, clone_cmd)
-    -- Release lock regardless of outcome
-    Lock.release(lock_path)
     if not ok then
+        Lock.release(lock_path)
         -- Clean up partial clone
         pcall(cmd.exec, "rm -rf '" .. shiv_path .. "'")
         error("Failed to bootstrap shiv: " .. tostring(result))
@@ -180,7 +239,14 @@ function ensure_shiv()
     local mise_bin = find_mise()
     pcall(cmd.exec, shiv_mise_env() .. mise_bin .. " trust -q -C '" .. shiv_path .. "'")
 
-    install_shiv_dependencies(shiv_path, mise_bin)
+    local deps_ok, deps_err = pcall(install_shiv_dependencies, shiv_path, mise_bin)
+    if deps_ok then
+        pcall(cmd.exec, "touch " .. Shell.quote(shiv_dependencies_marker(shiv_path)))
+    end
+    Lock.release(lock_path)
+    if not deps_ok then
+        error(deps_err)
+    end
 
     return shiv_path
 end
@@ -231,6 +297,22 @@ end
 function env_present(name)
     local value = os.getenv(name)
     return value ~= nil and value ~= ""
+end
+
+--- Check whether the plugin-managed shiv clone and runtime deps are ready.
+--- @param shiv_path string
+--- @param shiv_ref string
+--- @return boolean
+function shiv_bootstrap_ready(shiv_path, shiv_ref)
+    local file = require("file")
+    return shiv_ready(shiv_path, shiv_ref) and file.exists(shiv_dependencies_marker(shiv_path))
+end
+
+--- Return the marker path written after shiv runtime deps install.
+--- @param shiv_path string
+--- @return string
+function shiv_dependencies_marker(shiv_path)
+    return shiv_path .. "/.vfox-shiv-deps-ready"
 end
 
 --- Check whether the plugin-managed shiv clone exists at the desired ref.

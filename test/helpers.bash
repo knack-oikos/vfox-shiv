@@ -46,7 +46,7 @@ ensure_bootstrap() {
     current_ref=$(git -C "$shiv_path" describe --tags --exact-match HEAD 2>/dev/null || true)
   fi
 
-  if [ ! -d "$shiv_path/.git" ] || [ "$current_ref" != "$expected_ref" ]; then
+  if [ ! -d "$shiv_path/.git" ] || [ "$current_ref" != "$expected_ref" ] || [ ! -f "$shiv_path/.vfox-shiv-deps-ready" ]; then
     local tmpdir="$BATS_TEST_TMPDIR/bootstrap-trigger"
     local data_dir="$BATS_TEST_TMPDIR/bootstrap-mise-data"
     local cfg_dir="$BATS_TEST_TMPDIR/bootstrap-mise-config"

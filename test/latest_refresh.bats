@@ -51,9 +51,10 @@ TASK
   chmod +x "$VFOX_SHIV_PATH/.mise/tasks/install"
 
   printf '{}\n' > "$VFOX_SHIV_PATH/sources.json"
+  touch "$VFOX_SHIV_PATH/.vfox-shiv-deps-ready"
   git -C "$VFOX_SHIV_PATH" add .
   git -C "$VFOX_SHIV_PATH" commit -qm init
-  git -C "$VFOX_SHIV_PATH" tag vtest
+  git -c tag.gpgSign=false -C "$VFOX_SHIV_PATH" tag vtest
 
   mise trust "$VFOX_SHIV_PATH/mise.toml" 2>/dev/null
   MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml mise trust -C "$VFOX_SHIV_PATH" 2>/dev/null
