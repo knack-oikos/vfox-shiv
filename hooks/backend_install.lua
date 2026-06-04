@@ -1,6 +1,7 @@
 -- Shared libs: mise's vfox adds the plugin's lib/?.lua to package.path,
 -- so require("name") loads lib/name.lua.
 local Errors = require("errors")
+local GitHubAuth = require("github_auth")
 local Paths = require("path")
 local Lock = require("lock")
 local Shell = require("shell")
@@ -135,11 +136,7 @@ function list_install_versions(tool, shiv_path)
         return {}
     end
 
-    local auth_header = ""
-    local gh_token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
-    if gh_token ~= "" then
-        auth_header = [[-H "Authorization: token ${GITHUB_TOKEN:-$GH_TOKEN}" ]]
-    end
+    local auth_header = GitHubAuth.curl_auth_header()
 
     local tags_url = "https://api.github.com/repos/" .. repo .. "/tags"
     local ok, output = pcall(cmd.exec,
@@ -405,8 +402,8 @@ function install_shiv_dependencies(shiv_path, mise_bin)
         return
     end
 
-    if github_token_env_present() then
-        local scrubbed_cmd = "env -u GITHUB_TOKEN -u GH_TOKEN " .. install_cmd
+    if GitHubAuth.token_env_present() then
+        local scrubbed_cmd = GitHubAuth.scrub_env_prefix() .. install_cmd
         local scrubbed_ok, scrubbed_err = pcall(cmd.exec, scrubbed_cmd)
         if scrubbed_ok then
             return
@@ -415,25 +412,11 @@ function install_shiv_dependencies(shiv_path, mise_bin)
         error(
             "Failed to install shiv dependencies (gum). " ..
             "Attempt with inherited GitHub token failed: " .. Errors.clean_error(tostring(install_err)) ..
-            "\nRetry without GITHUB_TOKEN/GH_TOKEN also failed: " .. Errors.clean_error(tostring(scrubbed_err))
+            "\nRetry without GitHub token env vars also failed: " .. Errors.clean_error(tostring(scrubbed_err))
         )
     end
 
     error("Failed to install shiv dependencies (gum): " .. Errors.clean_error(tostring(install_err)))
-end
-
---- Return true when GitHub token env vars are present.
---- @return boolean
-function github_token_env_present()
-    return env_present("GITHUB_TOKEN") or env_present("GH_TOKEN")
-end
-
---- Return true when an env var is set to a non-empty value.
---- @param name string
---- @return boolean
-function env_present(name)
-    local value = os.getenv(name)
-    return value ~= nil and value ~= ""
 end
 
 --- Check whether the plugin-managed shiv clone and runtime deps are ready.

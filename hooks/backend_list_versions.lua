@@ -1,6 +1,7 @@
 -- Shared libs: mise's vfox implementation adds the plugin's lib/?.lua to
 -- package.path, so require("name") loads lib/name.lua. See
 -- jdx/mise crates/vfox/src/plugin.rs (set_paths).
+local GitHubAuth = require("github_auth")
 local Paths = require("path")
 local Shell = require("shell")
 
@@ -28,19 +29,13 @@ function PLUGIN:BackendListVersions(ctx)
     -- curl is always available; gh may not be on PATH inside mise's Lua sandbox.
     -- Tests can set CURL=/path/to/mock because mise's vfox cmd.exec does not
     -- preserve PATH overlays reliably.
-    -- Pass GITHUB_TOKEN for auth if available (avoids rate limits in CI).
+    -- Pass GitHub token env for auth if available (avoids rate limits in CI).
     local versions = {}
     table.insert(versions, "main")
     if os.getenv("VFOX_SHIV_SKIP_TAG_FETCH") == "1" then
         return { versions = versions }
     end
-    local auth_header = ""
-    local gh_token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
-    if gh_token ~= "" then
-        -- Keep the token out of the command string so verbose mise logs don't
-        -- print credentials. The shell expands the environment variable.
-        auth_header = [[-H "Authorization: token ${GITHUB_TOKEN:-$GH_TOKEN}" ]]
-    end
+    local auth_header = GitHubAuth.curl_auth_header()
     local tags_url = "https://api.github.com/repos/" .. repo .. "/tags"
     local ok, output = pcall(cmd.exec,
         curl_command() .. " -sf --max-time 10 " .. auth_header .. Shell.quote(tags_url))

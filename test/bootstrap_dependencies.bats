@@ -27,7 +27,7 @@ package.loaded["cmd"] = {
     log:write(command, "\n")
     log:close()
 
-    if command:match("env %-u GITHUB_TOKEN %-u GH_TOKEN") then
+    if command:match("env %-u GITHUB_TOKEN %-u GH_TOKEN %-u MISE_GITHUB_TOKEN") then
       if os.getenv("SCRUBBED_FAIL") == "1" then
         error("scrubbed failed")
       end
@@ -48,6 +48,7 @@ LUA
   run env \
     -u GITHUB_TOKEN \
     -u GH_TOKEN \
+    -u MISE_GITHUB_TOKEN \
     -u INHERITED_FAIL \
     -u SCRUBBED_FAIL \
     "$@" \
@@ -62,7 +63,7 @@ LUA
   local line_count
   line_count="$(wc -l < "$LAST_EXEC_LOG" | tr -d ' ')"
   [ "$line_count" -eq 1 ]
-  ! grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN' "$LAST_EXEC_LOG"
+  ! grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN -u MISE_GITHUB_TOKEN' "$LAST_EXEC_LOG"
   grep -q "MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml /bin/mise install -q -C '/tmp/shiv'" "$LAST_EXEC_LOG"
 }
 
@@ -75,8 +76,21 @@ LUA
   local line_count
   line_count="$(wc -l < "$LAST_EXEC_LOG" | tr -d ' ')"
   [ "$line_count" -eq 2 ]
-  ! head -n 1 "$LAST_EXEC_LOG" | grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN'
-  tail -n 1 "$LAST_EXEC_LOG" | grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN'
+  ! head -n 1 "$LAST_EXEC_LOG" | grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN -u MISE_GITHUB_TOKEN'
+  tail -n 1 "$LAST_EXEC_LOG" | grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN -u MISE_GITHUB_TOKEN'
+}
+
+@test "dependency install retries when only MISE_GITHUB_TOKEN is set" {
+  run_dependency_lua 'install_shiv_dependencies("/tmp/shiv", "/bin/mise")' \
+    MISE_GITHUB_TOKEN=bad \
+    INHERITED_FAIL=1
+  [ "$status" -eq 0 ]
+
+  local line_count
+  line_count="$(wc -l < "$LAST_EXEC_LOG" | tr -d ' ')"
+  [ "$line_count" -eq 2 ]
+  ! head -n 1 "$LAST_EXEC_LOG" | grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN -u MISE_GITHUB_TOKEN'
+  tail -n 1 "$LAST_EXEC_LOG" | grep -q 'env -u GITHUB_TOKEN -u GH_TOKEN -u MISE_GITHUB_TOKEN'
 }
 
 @test "dependency install reports both failures when auth retry also fails" {
@@ -94,7 +108,7 @@ print(err)
     SCRUBBED_FAIL=1
   [ "$status" -eq 0 ]
   [[ "$output" == *"Attempt with inherited GitHub token failed"* ]]
-  [[ "$output" == *"Retry without GITHUB_TOKEN/GH_TOKEN also failed"* ]]
+  [[ "$output" == *"Retry without GitHub token env vars also failed"* ]]
 
   local line_count
   line_count="$(wc -l < "$LAST_EXEC_LOG" | tr -d ' ')"
@@ -113,7 +127,7 @@ print(err)
 ' INHERITED_FAIL=1
   [ "$status" -eq 0 ]
   [[ "$output" == *"Failed to install shiv dependencies (gum):"* ]]
-  [[ "$output" != *"Retry without GITHUB_TOKEN/GH_TOKEN"* ]]
+  [[ "$output" != *"Retry without GitHub token env vars"* ]]
 
   local line_count
   line_count="$(wc -l < "$LAST_EXEC_LOG" | tr -d ' ')"

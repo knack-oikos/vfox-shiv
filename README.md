@@ -6,7 +6,7 @@
 
 ![plugin: lua](https://img.shields.io/badge/plugin-lua-000080?style=flat&logo=lua&logoColor=white)
 [![runtime: mise](https://img.shields.io/badge/runtime-mise-7c3aed?style=flat)](https://mise.jdx.dev)
-![tests: 80 passing](https://img.shields.io/badge/tests-80%20passing-brightgreen?style=flat)
+![tests: 82 passing](https://img.shields.io/badge/tests-82%20passing-brightgreen?style=flat)
 [![shiv: v0.2.8](https://img.shields.io/badge/shiv-v0.2.8-blue?style=flat)](https://github.com/KnickKnackLabs/shiv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat)](LICENSE)
 
