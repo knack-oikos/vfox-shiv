@@ -49,6 +49,159 @@ test("dependency install reports both inherited and scrubbed failures", function
     end)
 end)
 
+test("install lock env propagates owner and serializes nested mise", function()
+    load_backend_install({ exec = function() return "" end })
+
+    local env = install_lock_env("owner-token")
+    assert_contains(env, "VFOX_SHIV_INSTALL_LOCK_OWNER='owner-token'")
+    assert_contains(env, "MISE_JOBS=1 ")
+end)
+
+test("with_lock passes owner token to callback", function()
+    local commands = {}
+    local cmd_module = {
+        exec = function(command)
+            table.insert(commands, command)
+            if command:find("^printf '%%s:%%s:%%s'") then
+                return "owner-token\n"
+            end
+            return ""
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    local callback_owner
+    local result
+    with_env({ VFOX_SHIV_INSTALL_LOCK_OWNER = false }, function()
+        result = with_lock("/tmp/vfox-shiv-install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function(owner)
+            callback_owner = owner
+            return "done"
+        end)
+    end)
+
+    assert_equal(result, "done")
+    assert_equal(callback_owner, "owner-token")
+    local log = table.concat(commands, "\n")
+    assert_contains(log, "mkdir '/tmp/vfox-shiv-install.lock' 2>/dev/null")
+    assert_contains(log, "printf '%s' 'owner-token' > '/tmp/vfox-shiv-install.lock/owner'")
+    assert_contains(log, "rm -rf '/tmp/vfox-shiv-install.lock'")
+end)
+
+test("with_lock is reentrant for matching inherited owner", function()
+    local commands = {}
+    local cmd_module = {
+        exec = function(command)
+            table.insert(commands, command)
+            if command:find("^cat '/tmp/vfox%-shiv%-install%.lock/owner'") then
+                return "owner-token\n"
+            end
+            error("unexpected command: " .. command)
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    local callback_owner
+    local result
+    with_env({ VFOX_SHIV_INSTALL_LOCK_OWNER = "owner-token" }, function()
+        result = with_lock("/tmp/vfox-shiv-install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function(owner)
+            callback_owner = owner
+            return "nested-done"
+        end)
+    end)
+
+    assert_equal(result, "nested-done")
+    assert_equal(callback_owner, "owner-token")
+    assert_equal(#commands, 1)
+    assert_contains(commands[1], "cat '/tmp/vfox-shiv-install.lock/owner' 2>/dev/null")
+end)
+
+test("with_lock allows nested callbacks from same owner", function()
+    local commands = {}
+    local cmd_module = {
+        exec = function(command)
+            table.insert(commands, command)
+            if command:find("^printf '%%s:%%s:%%s'") then
+                return "owner-token\n"
+            end
+            if command:find("^cat '/tmp/vfox%-shiv%-install%.lock/owner'") then
+                return "owner-token\n"
+            end
+            return ""
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    local nested_owner
+    with_env({ VFOX_SHIV_INSTALL_LOCK_OWNER = false }, function()
+        with_lock("/tmp/vfox-shiv-install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function(owner)
+            with_env({ VFOX_SHIV_INSTALL_LOCK_OWNER = owner }, function()
+                with_lock("/tmp/vfox-shiv-install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function(owner_from_nested)
+                    nested_owner = owner_from_nested
+                end)
+            end)
+        end)
+    end)
+
+    assert_equal(nested_owner, "owner-token")
+    local log = table.concat(commands, "\n")
+    assert_contains(log, "cat '/tmp/vfox-shiv-install.lock/owner' 2>/dev/null")
+    assert_contains(log, "rm -rf '/tmp/vfox-shiv-install.lock'")
+end)
+
+test("BackendInstall lets delegated dependency installs reenter lock", function()
+    local nested_owner
+    local saw_delegated_install = false
+    local commands = {}
+    local cmd_module = {
+        exec = function(command)
+            table.insert(commands, command)
+            if command == "command -v mise" then
+                return "/bin/mise\n"
+            end
+            if command:find("^git %-C '/tmp/shiv' describe") then
+                return "v0.3.2\n"
+            end
+            if command:find("^printf '%%s:%%s:%%s'") then
+                return "owner-token\n"
+            end
+            if command:find("^cat '/tmp/shiv%.install%.lock/owner'") then
+                return "owner-token\n"
+            end
+            if command:find("run %-%-skip%-tools %-q install 'emails@v0%.6%.2'") then
+                saw_delegated_install = true
+                assert_contains(command, "VFOX_SHIV_INSTALL_LOCK_OWNER='owner-token'")
+                assert_contains(command, "MISE_JOBS=1")
+                with_env({ VFOX_SHIV_INSTALL_LOCK_OWNER = "owner-token" }, function()
+                    with_lock("/tmp/shiv.install.lock", "VFOX_TEST_LOCK_MAX_ATTEMPTS", "test install", function(owner)
+                        nested_owner = owner
+                    end)
+                end)
+                return ""
+            end
+            return ""
+        end,
+    }
+    local previous_file = package.loaded["file"]
+    package.loaded["file"] = {
+        exists = function(path)
+            return path == "/tmp/shiv/.git/HEAD" or path == "/tmp/shiv/.vfox-shiv-deps-ready"
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    with_env({ VFOX_SHIV_PATH = "/tmp/shiv", VFOX_SHIV_INSTALL_LOCK_OWNER = false }, function()
+        PLUGIN:BackendInstall({ tool = "emails", version = "0.6.2", install_path = "/tmp/install" })
+    end)
+    package.loaded["file"] = previous_file
+
+    assert_truthy(saw_delegated_install)
+    assert_equal(nested_owner, "owner-token")
+    local log = table.concat(commands, "\n")
+    assert_contains(log, "printf '%s' 'owner-token' > '/tmp/shiv.install.lock/owner'")
+    assert_contains(log, "cat '/tmp/shiv.install.lock/owner' 2>/dev/null")
+    assert_contains(log, "rm -rf '/tmp/shiv.install.lock'")
+end)
+
 test("numeric minor install ref resolves to newest matching patch", function()
     load_backend_install({ exec = function() return "" end })
 

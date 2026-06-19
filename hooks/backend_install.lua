@@ -47,9 +47,10 @@ function PLUGIN:BackendInstall(ctx)
     -- The delegated shiv task may itself run nested `mise install` for package
     -- dependencies. On macOS mise 2026.6.0, repeated/concurrent nested installs
     -- can race or fail while rebuilding runtime symlinks. Serialize this shared
-    -- delegated phase while keeping each package's SHIV_* install paths isolated.
+    -- delegated phase, but allow descendant shiv installs from the same package
+    -- install to reenter the lock.
     local install_lock_path = shiv_path .. ".install.lock"
-    with_lock(install_lock_path, "VFOX_SHIV_INSTALL_LOCK_MAX_ATTEMPTS", "shiv package install", function()
+    with_lock(install_lock_path, "VFOX_SHIV_INSTALL_LOCK_MAX_ATTEMPTS", "shiv package install", function(lock_owner)
         -- Sync remote sources.json into bundled shiv so it knows about new packages.
         -- Keep this inside the install lock because every package install writes the
         -- same bundled sources.json file.
@@ -64,7 +65,7 @@ function PLUGIN:BackendInstall(ctx)
         local mise_bin = find_mise()
         local quoted_mise = Shell.quote(mise_bin)
         local quoted_shiv_path = Shell.quote(shiv_path)
-        local install_cmd = env_prefix .. shiv_mise_env() .. quoted_mise .. " -C " .. quoted_shiv_path ..
+        local install_cmd = env_prefix .. shiv_mise_env() .. install_lock_env(lock_owner) .. quoted_mise .. " -C " .. quoted_shiv_path ..
             " exec --no-deps -- " .. quoted_mise .. " -C " .. quoted_shiv_path ..
             " run --skip-tools -q install " .. Shell.quote(tool_spec)
 
@@ -220,11 +221,22 @@ function numeric_parts(version)
 end
 
 --- Run a callback under a directory lock, reclaiming dead-holder locks.
+---
+--- The shiv install task runs package-local `mise install` for dependencies.
+--- Those dependency installs can include more shiv:* tools, so this lock must be
+--- reentrant for descendants of the process that already holds it. The holder
+--- writes an owner token into the lock directory and passes that token to nested
+--- mise commands via VFOX_SHIV_INSTALL_LOCK_OWNER.
 --- @param lock_path string
 --- @param max_attempts_env string
 --- @param lock_name string
 --- @param callback function
 function with_lock(lock_path, max_attempts_env, lock_name, callback)
+    local inherited_owner = inherited_lock_owner(lock_path)
+    if inherited_owner then
+        return callback(inherited_owner)
+    end
+
     local cmd = require("cmd")
     local parent_dir = lock_path:match("(.+)/[^/]+$")
     if parent_dir then
@@ -254,12 +266,65 @@ function with_lock(lock_path, max_attempts_env, lock_name, callback)
         )
     end
 
-    local ok, result = pcall(callback)
+    local owner = new_lock_owner()
+    local owner_ok, owner_err = pcall(cmd.exec,
+        "printf '%s' " .. Shell.quote(owner) .. " > " .. Shell.quote(lock_owner_path(lock_path)))
+    if not owner_ok then
+        Lock.release(lock_path)
+        error("Failed to write " .. lock_name .. " lock owner: " .. Errors.clean_error(tostring(owner_err)))
+    end
+
+    local ok, result = pcall(function()
+        return callback(owner)
+    end)
     Lock.release(lock_path)
     if not ok then
         error(result)
     end
     return result
+end
+
+--- Return the env prefix propagated to nested shiv dependency installs.
+--- @param lock_owner string
+--- @return string
+function install_lock_env(lock_owner)
+    return "VFOX_SHIV_INSTALL_LOCK_OWNER=" .. Shell.quote(lock_owner) .. " MISE_JOBS=1 "
+end
+
+--- Return the inherited lock owner when it matches the current lock directory.
+--- @param lock_path string
+--- @return string|nil
+function inherited_lock_owner(lock_path)
+    local owner = trim(os.getenv("VFOX_SHIV_INSTALL_LOCK_OWNER") or "")
+    if owner == "" then
+        return nil
+    end
+
+    local cmd = require("cmd")
+    local ok, current = pcall(cmd.exec, "cat " .. Shell.quote(lock_owner_path(lock_path)) .. " 2>/dev/null")
+    if ok and trim(current) == owner then
+        return owner
+    end
+    return nil
+end
+
+--- Path of the owner token inside a lock directory.
+--- @param lock_path string
+--- @return string
+function lock_owner_path(lock_path)
+    return lock_path .. "/owner"
+end
+
+--- Create a best-effort unique owner token for reentrant install locking.
+--- @return string
+function new_lock_owner()
+    local cmd = require("cmd")
+    local ok, token = pcall(cmd.exec,
+        "printf '%s:%s:%s' \"$PPID\" \"$$\" \"$(date +%s%N 2>/dev/null || date +%s)\"")
+    if ok and token and trim(token) ~= "" then
+        return trim(token)
+    end
+    return tostring(os.time()) .. ":" .. tostring(math.random(1000000000))
 end
 
 --- Sync the bundled shiv's sources.json with the remote version.
