@@ -119,7 +119,11 @@ function resolve_numeric_version(tool, version, shiv_path)
     end
 
     if #matches == 0 then
-        return version
+        error(
+            "Could not resolve shiv:" .. tool .. "@" .. version ..
+            " to a concrete release tag. Expected a matching tag like v" .. version .. ".x; " ..
+            "GitHub tag fetch may have failed or no matching release exists."
+        )
     end
 
     table.sort(matches, semver_less)
@@ -142,12 +146,17 @@ function list_install_versions(tool, shiv_path)
     local tags_url = "https://api.github.com/repos/" .. repo .. "/tags"
     local ok, output = pcall(cmd.exec,
         curl_command() .. " -sf --max-time 10 " .. auth_header .. Shell.quote(tags_url))
+    if not ok or not output or output == "" then
+        error(
+            "Could not fetch GitHub tags for shiv:" .. tool ..
+            "; cannot resolve partial numeric version without release tags."
+        )
+    end
+
     local versions = {}
-    if ok and output and output ~= "" then
-        for tag in output:gmatch('"name"%s*:%s*"([^"]+)"') do
-            local version = tag:gsub("^v", "")
-            table.insert(versions, version)
-        end
+    for tag in output:gmatch('"name"%s*:%s*"([^"]+)"') do
+        local version = tag:gsub("^v", "")
+        table.insert(versions, version)
     end
     return versions
 end
