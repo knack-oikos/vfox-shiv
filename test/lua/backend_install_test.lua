@@ -221,6 +221,64 @@ test("numeric minor install ref resolves to newest matching patch", function()
     end
 end)
 
+test("numeric minor install ref fails clearly with no matching patch", function()
+    load_backend_install({ exec = function() return "" end })
+
+    local original = list_install_versions
+    list_install_versions = function(tool, shiv_path)
+        assert_equal(tool, "moving")
+        assert_equal(shiv_path, "/tmp/shiv")
+        return { "0.8.9", "0.10.0" }
+    end
+
+    local ok, err = pcall(function()
+        resolve_install_ref("moving", "0.9", "/tmp/shiv")
+    end)
+    list_install_versions = original
+
+    assert_falsey(ok)
+    assert_contains(err, "Could not resolve shiv:moving@0.9 to a concrete release tag")
+    assert_contains(err, "Expected a matching tag like v0.9.x")
+end)
+
+test("numeric minor install ref fails clearly when tag fetch fails", function()
+    local cmd_module = {
+        exec = function(command)
+            if command:find("/tags", 1, true) then
+                error("rate limited")
+            end
+            if command:find("ls '/tmp/sources'/*.json", 1, true) then
+                return "/tmp/sources/test.json\n"
+            end
+            return ""
+        end,
+    }
+    local previous_file = package.loaded["file"]
+    package.loaded["file"] = {
+        read = function(path)
+            if path == "/tmp/sources/test.json" then
+                return '{"moving":"Acme/moving"}'
+            end
+            return "{}"
+        end,
+        exists = function()
+            return false
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    local ok, err = pcall(function()
+        with_env({ SHIV_SOURCES_DIR = "/tmp/sources" }, function()
+            resolve_install_ref("moving", "0.9", "/tmp/shiv")
+        end)
+    end)
+    package.loaded["file"] = previous_file
+
+    assert_falsey(ok)
+    assert_contains(err, "Could not fetch GitHub tags for shiv:moving")
+    assert_contains(err, "cannot resolve partial numeric version without release tags")
+end)
+
 test("exact numeric install ref keeps its concrete version", function()
     load_backend_install({ exec = function() return "" end })
     assert_equal(resolve_install_ref("moving", "0.9.3", "/tmp/shiv"), "v0.9.3")
