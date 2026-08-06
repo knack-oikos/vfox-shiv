@@ -39,7 +39,7 @@ EOF
 # Triggers bootstrap by installing a lightweight package.
 ensure_bootstrap() {
   local shiv_path="${VFOX_SHIV_PATH:-$HOME/.local/share/mise/shiv-backend/shiv}"
-  local expected_ref="${VFOX_SHIV_REF:-v0.4.0}"
+  local expected_ref="${VFOX_SHIV_REF:-v0.5.0}"
   local current_ref=""
 
   if [ -d "$shiv_path/.git" ]; then
