@@ -7,7 +7,7 @@
 ![plugin: lua](https://img.shields.io/badge/plugin-lua-000080?style=flat&logo=lua&logoColor=white)
 [![runtime: mise](https://img.shields.io/badge/runtime-mise-7c3aed?style=flat)](https://mise.jdx.dev)
 ![tests: 82 passing](https://img.shields.io/badge/tests-82%20passing-brightgreen?style=flat)
-[![shiv: v0.5.2](https://img.shields.io/badge/shiv-v0.5.2-blue?style=flat)](https://github.com/KnickKnackLabs/shiv)
+[![shiv: v0.5.3](https://img.shields.io/badge/shiv-v0.5.3-blue?style=flat)](https://github.com/KnickKnackLabs/shiv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat)](LICENSE)
 
 </div>
@@ -37,7 +37,7 @@ mise install "shiv:shimmer@0.0.1-alpha"
   │    list git tags + branch pseudo-version → ["main", "0.0.1-alpha"]
   │
   ├─ BackendInstall
-  │    ensure shiv is bootstrapped (pinned to v0.5.2)
+  │    ensure shiv is bootstrapped (pinned to v0.5.3)
   │    SHIV_PACKAGES_DIR=<install_path>/packages \
   │    SHIV_BIN_DIR=<install_path>/bin \
   │      mise -C <shiv> run install shimmer@v0.0.1-alpha
@@ -46,7 +46,7 @@ mise install "shiv:shimmer@0.0.1-alpha"
        PATH += <install_path>/bin
 ```
 
-The plugin maintains its own shiv clone at `~/.local/share/mise/shiv-backend/shiv/`, pinned to `v0.5.2` for reproducibility. This is separate from any user-installed shiv — the plugin's build infrastructure doesn't change unless you deliberately update it.
+The plugin maintains its own shiv clone at `~/.local/share/mise/shiv-backend/shiv/`, pinned to `v0.5.3` for reproducibility. This is separate from any user-installed shiv — the plugin's build infrastructure doesn't change unless you deliberately update it.
 
 Version isolation comes from overriding shiv's path environment variables. Each version gets its own directory under mise's installs, so project A can pin `shimmer@0.0.1-alpha` while project B tracks the newest release with `latest`.
 
@@ -80,7 +80,7 @@ VFOX_SHIV_PATH     Path to plugin's shiv clone
                    Default: ~/.local/share/mise/shiv-backend/shiv
 
 VFOX_SHIV_REF      Pinned shiv version for bootstrap
-                   Default: v0.5.2
+                   Default: v0.5.3
 
 VFOX_SHIV_REPO     Shiv repository URL
                    Default: https://github.com/KnickKnackLabs/shiv.git

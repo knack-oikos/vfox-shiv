@@ -159,7 +159,7 @@ test("BackendInstall lets delegated dependency installs reenter lock", function(
                 return "/bin/mise\n"
             end
             if command:find("^git %-C '/tmp/shiv' describe") then
-                return "v0.5.2\n"
+                return "v0.5.3\n"
             end
             if command:find("^printf '%%s:%%s:%%s'") then
                 return "owner-token\n"
