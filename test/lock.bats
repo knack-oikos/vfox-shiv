@@ -3,7 +3,7 @@
 
 setup() {
   LIB_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/lib"
-  LUA_BIN="$(mise which lua)"
+  LUA_BIN="${VFOX_SHIV_TEST_LUA_BIN:-$(mise which lua)}"
   LOCK="$BATS_TEST_TMPDIR/shiv.lock"
 }
 

@@ -5,7 +5,7 @@ setup() {
   LIB="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/lib/path.lua"
   # Resolve the real lua binary — going through the mise shim in env -i
   # re-reads mise config and fails if $PWD's config isn't trusted.
-  LUA_BIN="$(mise which lua)"
+  LUA_BIN="${VFOX_SHIV_TEST_LUA_BIN:-$(mise which lua)}"
 }
 
 # Run a Lua snippet with a controlled environment.

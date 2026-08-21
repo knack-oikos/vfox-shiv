@@ -7,14 +7,19 @@
 #USAGE example "mise run test -- --filter rejects" header="Filter tests by name"
 set -euo pipefail
 
-TEST_DIR="$MISE_CONFIG_ROOT/test"
+repo_dir="$(cd "${MISE_CONFIG_ROOT:?run this task through mise}" && pwd)"
+test_dir="$repo_dir/test"
+bats_bin="$(command -v bats)"
+export VFOX_SHIV_TEST_LUA_BIN="$(command -v lua)"
+
+source "$test_dir/mise_isolation.bash"
+setup_mise_test_isolation "$repo_dir"
 
 args=()
 has_target=false
-
 for arg in "$@"; do
-  if [[ "$arg" != -* && "$arg" != *.bats && -f "$TEST_DIR/$arg.bats" ]]; then
-    args+=("$TEST_DIR/$arg.bats")
+  if [[ "$arg" != -* && "$arg" != *.bats && -f "$test_dir/$arg.bats" ]]; then
+    args+=("$test_dir/$arg.bats")
     has_target=true
   else
     [[ "$arg" == *.bats || -d "$arg" ]] && has_target=true
@@ -23,7 +28,7 @@ for arg in "$@"; do
 done
 
 if ! $has_target; then
-  args+=("$TEST_DIR/")
+  args+=("$test_dir/")
 fi
 
-bats "${args[@]}"
+"$bats_bin" "${args[@]}"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 
 # Integration tests for the full vfox-shiv bootstrap chain.
-# These simulate a clean machine: no pre-existing shiv clone, no gum.
+# These simulate a clean machine with no pre-existing shiv clone or global Gum.
+# Every install path uses Gum resolved from the task-owned Mise data root.
 
 setup() {
   load helpers
@@ -20,12 +21,16 @@ teardown() {
   mise uninstall shiv:readme@0.1.0 2>/dev/null || true
 }
 
-@test "bootstrap installs gum as a shiv dependency" {
+@test "bootstrap installs Gum as a Shiv dependency" {
   run mise install shiv:readme@0.1.0
   [ "$status" -eq 0 ]
 
-  # gum should be available inside shiv's mise environment
-  run bash -c "MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml mise exec -C '$VFOX_SHIV_PATH' -- gum --version"
+  run env MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml mise -C "$VFOX_SHIV_PATH" which gum
+  [ "$status" -eq 0 ]
+  local gum_path="$output"
+  [[ "$gum_path" == "$MISE_DATA_DIR/installs/gum/"* ]]
+
+  run "$gum_path" --version
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "gum version"
 }
