@@ -2,7 +2,7 @@
 
 # Integration tests for the full vfox-shiv bootstrap chain.
 # These simulate a clean machine with no pre-existing shiv clone or global Gum.
-# Tests that do not exercise dependency bootstrap opt into a test-owned Gum.
+# Every install path uses Gum resolved from the task-owned Mise data root.
 
 setup() {
   load helpers
@@ -36,8 +36,6 @@ teardown() {
 }
 
 @test "bootstrap succeeds when GitHub token env vars are set to non-github.com tokens" {
-  install_mock_gum
-
   # Simulate a GHE environment where inherited tokens don't work on github.com.
   export GITHUB_TOKEN="ghp_fake_ghe_token_that_should_not_be_used"
   export GH_TOKEN="ghp_fake_gh_token_that_should_not_be_used"
@@ -52,8 +50,6 @@ teardown() {
 }
 
 @test "install works when MISE_OVERRIDE_CONFIG_FILENAMES is set by parent" {
-  install_mock_gum
-
   # Simulate okwai CI where the parent sets MISE_OVERRIDE_CONFIG_FILENAMES.
   # vfox-shiv must override this for its own nested mise calls, otherwise
   # shiv's mise.prod.toml is ignored and gum doesn't get installed.

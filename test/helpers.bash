@@ -4,56 +4,6 @@ PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 : "${VFOX_SHIV_TEST_ISOLATION_ROOT:?run tests through mise run test}"
 
-install_mock_gum() {
-  export VFOX_SHIV_TEST_MOCK_BIN="$BATS_TEST_TMPDIR/mock-bin"
-  mkdir -p "$VFOX_SHIV_TEST_MOCK_BIN"
-  export PATH="$VFOX_SHIV_TEST_MOCK_BIN:$PATH"
-
-  cat > "$VFOX_SHIV_TEST_MOCK_BIN/gum" <<'GUM'
-#!/usr/bin/env bash
-set -euo pipefail
-
-command_name="${1:-}"
-case "$command_name" in
-  spin)
-    shift
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--" ]; then
-        shift
-        if [ "$#" -eq 0 ]; then
-          printf 'test gum spin requires a command after --\n' >&2
-          exit 2
-        fi
-        exec "$@"
-      fi
-      shift
-    done
-    printf 'test gum spin requires -- followed by a command\n' >&2
-    exit 2
-    ;;
-  table)
-    cat
-    ;;
-  style)
-    shift
-    text=""
-    for arg in "$@"; do
-      text="$arg"
-    done
-    printf '%s\n' "$text"
-    ;;
-  --version|version)
-    printf 'gum version 0.0.0-test\n'
-    ;;
-  *)
-    printf 'unsupported test gum command: %s\n' "$command_name" >&2
-    exit 2
-    ;;
-esac
-GUM
-  chmod +x "$VFOX_SHIV_TEST_MOCK_BIN/gum"
-}
-
 # Install the plugin locally under a given name for testing.
 # Uses a fresh isolated mise plugin link each time.
 install_plugin() {

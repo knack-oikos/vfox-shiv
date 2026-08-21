@@ -2,7 +2,6 @@
 
 setup() {
   load helpers
-  install_mock_gum
   install_plugin
   ensure_bootstrap
 }

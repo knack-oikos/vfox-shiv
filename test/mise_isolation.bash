@@ -26,7 +26,6 @@ trap 'rm -rf "$isolation_root"' EXIT
 
 export VFOX_SHIV_TEST_ISOLATION_ROOT="$isolation_root"
 export VFOX_SHIV_TEST_AMBIENT_MISE_SHIMS="$incoming_data_dir/shims"
-unset VFOX_SHIV_TEST_MOCK_BIN
 export MISE_DATA_DIR="$isolation_root/mise-data"
 export MISE_CACHE_DIR="$isolation_root/mise-cache"
 export MISE_CONFIG_DIR="$isolation_root/mise-config"

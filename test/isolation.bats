@@ -33,17 +33,3 @@ setup() {
   [[ "$output" != *"~/.config/mise/config.toml"* ]]
   [[ "$output" != *"$HOME/.config/mise/config.toml"* ]]
 }
-
-@test "test Gum executes wrapped commands and rejects malformed spin calls" {
-  install_mock_gum
-
-  run gum spin
-  [ "$status" -eq 2 ]
-
-  run gum spin --
-  [ "$status" -eq 2 ]
-
-  run gum spin -- printf 'wrapped command ran\n'
-  [ "$status" -eq 0 ]
-  [ "$output" = "wrapped command ran" ]
-}
