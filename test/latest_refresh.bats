@@ -2,16 +2,17 @@
 
 setup() {
   load helpers
-
-  export MISE_DATA_DIR="$BATS_TEST_TMPDIR/mise-data"
-  export MISE_CONFIG_DIR="$BATS_TEST_TMPDIR/mise-config"
   export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
-  mkdir -p "$MISE_DATA_DIR" "$MISE_CONFIG_DIR" "$XDG_CACHE_HOME/mise/shiv-backend"
+  mkdir -p "$XDG_CACHE_HOME/mise/shiv-backend"
 
   install_plugin
   setup_fake_shiv
   setup_mock_curl
   setup_latest_project
+
+  # The suite intentionally shares one isolated Mise root. Keep this fixture's
+  # fake package versions independent without creating another state boundary.
+  mise uninstall --all shiv:moving >/dev/null 2>&1 || true
 }
 
 setup_fake_shiv() {
