@@ -354,7 +354,7 @@ end
 
 --- Ensure the plugin's shiv clone exists and is at the pinned ref.
 --- Bootstraps via git clone if not present.
---- @param tool string Tool being installed, excluded from nested mise calls
+--- @param tool string
 --- @return string Path to the shiv clone
 function ensure_shiv(tool)
     local cmd = require("cmd")
@@ -468,7 +468,7 @@ end
 --- variables scrubbed.
 --- @param shiv_path string
 --- @param mise_bin string
---- @param tool string Tool being installed, excluded from this nested install
+--- @param tool string
 function install_shiv_dependencies(shiv_path, mise_bin, tool)
     local cmd = require("cmd")
     local install_cmd = shiv_mise_env(tool) .. mise_bin .. " install -q -C " .. Shell.quote(shiv_path)
@@ -565,7 +565,7 @@ end
 --- Points mise at mise.prod.toml (runtime-only dependencies) so dev/test
 --- tools like bats aren't installed during bootstrap. This also prevents
 --- the parent's MISE_OVERRIDE_CONFIG_FILENAMES from leaking in.
---- @param tool? string Tool being installed, excluded from the nested call
+--- @param tool? string
 --- @return string
 function shiv_mise_env(tool)
     local prefix = "MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml "
@@ -577,11 +577,9 @@ end
 
 --- Exclude the tool being installed from nested mise calls.
 ---
---- mise takes its own flock on a tool before calling BackendInstall, and config
---- resolution is hierarchical: -C into the shiv clone does not shed the user's
---- global config. Without this the nested install reads that config back, sees
---- the tool it is already inside as missing, and blocks forever on the flock its
---- own ancestor holds. Appending preserves an outer install's exclusions.
+--- Dropping this, or assigning instead of appending, deadlocks: mise already
+--- holds a flock on the tool, and a nested install reaching the global config
+--- would wait on its own ancestor.
 --- @param tool string
 --- @return string
 function nested_disable_tools(tool)
@@ -594,8 +592,8 @@ function nested_disable_tools(tool)
 end
 
 --- Return the backend prefix this plugin is served under.
---- mise names the backend after the plugin directory, so a plugin installed as
---- `shiv` answers for `shiv:<tool>` and must disable it under that same name.
+--- mise names the backend after the plugin directory, and matches
+--- MISE_DISABLE_TOOLS only against that qualified form.
 --- @return string
 function backend_prefix()
     local ok, dir = pcall(function() return RUNTIME.pluginDirPath end)
