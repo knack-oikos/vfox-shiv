@@ -283,3 +283,118 @@ test("exact numeric install ref keeps its concrete version", function()
     load_backend_install({ exec = function() return "" end })
     assert_equal(resolve_install_ref("moving", "0.9.3", "/tmp/shiv"), "v0.9.3")
 end)
+
+test("nested mise env disables the tool being installed", function()
+    load_backend_install({ exec = function() return "" end })
+
+    with_env({ MISE_DISABLE_TOOLS = false }, function()
+        assert_contains(shiv_mise_env("readme"), "MISE_DISABLE_TOOLS='shiv:readme' ")
+    end)
+end)
+
+test("nested mise env keeps an outer install's disabled tools", function()
+    load_backend_install({ exec = function() return "" end })
+
+    with_env({ MISE_DISABLE_TOOLS = "shiv:emails" }, function()
+        assert_contains(shiv_mise_env("readme"), "MISE_DISABLE_TOOLS='shiv:emails,shiv:readme' ")
+    end)
+end)
+
+test("nested mise env omits the disable when no tool is named", function()
+    load_backend_install({ exec = function() return "" end })
+
+    with_env({ MISE_DISABLE_TOOLS = false }, function()
+        assert_not_contains(shiv_mise_env(), "MISE_DISABLE_TOOLS")
+    end)
+end)
+
+test("backend prefix follows the directory mise installed the plugin under", function()
+    load_backend_install({ exec = function() return "" end })
+
+    local previous = RUNTIME
+    RUNTIME = { pluginDirPath = "/data/mise/plugins/shiv-alt" }
+    local ok, err = pcall(function()
+        assert_equal(backend_prefix(), "shiv-alt")
+    end)
+    RUNTIME = previous
+    if not ok then
+        error(err)
+    end
+end)
+
+test("backend prefix falls back when the plugin dir is unavailable", function()
+    load_backend_install({ exec = function() return "" end })
+
+    local previous = RUNTIME
+    RUNTIME = nil
+    local ok, err = pcall(function()
+        assert_equal(backend_prefix(), "shiv")
+    end)
+    RUNTIME = previous
+    if not ok then
+        error(err)
+    end
+end)
+
+test("bootstrap dependency install disables the tool it is installing", function()
+    local commands = {}
+    local cmd_module = {
+        exec = function(command)
+            table.insert(commands, command)
+            return ""
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    with_env({ MISE_DISABLE_TOOLS = false }, function()
+        install_shiv_dependencies("/tmp/shiv", "/bin/mise", "readme")
+    end)
+
+    assert_equal(#commands, 1)
+    assert_contains(commands[1], "MISE_DISABLE_TOOLS='shiv:readme'")
+    assert_contains(commands[1], "install -q -C '/tmp/shiv'")
+end)
+
+test("BackendInstall disables the installing tool for every nested mise call", function()
+    local commands = {}
+    local cmd_module = {
+        exec = function(command)
+            table.insert(commands, command)
+            if command == "command -v mise" then
+                return "/bin/mise\n"
+            end
+            if command:find("^git %-C '/tmp/shiv' describe") then
+                return "v0.5.3\n"
+            end
+            if command:find("^printf '%%s:%%s:%%s'") then
+                return "owner-token\n"
+            end
+            return ""
+        end,
+    }
+    local previous_file = package.loaded["file"]
+    package.loaded["file"] = {
+        exists = function(path)
+            return path == "/tmp/shiv/.git/HEAD" or path == "/tmp/shiv/.vfox-shiv-deps-ready"
+        end,
+    }
+    load_backend_install(cmd_module)
+
+    with_env({
+        VFOX_SHIV_PATH = "/tmp/shiv",
+        VFOX_SHIV_INSTALL_LOCK_OWNER = false,
+        MISE_DISABLE_TOOLS = false,
+    }, function()
+        PLUGIN:BackendInstall({ tool = "emails", version = "0.6.2", install_path = "/tmp/install" })
+    end)
+    package.loaded["file"] = previous_file
+
+    local delegated
+    for _, command in ipairs(commands) do
+        if command:find("run %-%-skip%-tools %-q install 'emails@v0%.6%.2'") then
+            delegated = command
+        end
+    end
+    assert_truthy(delegated, "expected the delegated shiv install command")
+    assert_contains(delegated, "MISE_DISABLE_TOOLS='shiv:emails'")
+end)

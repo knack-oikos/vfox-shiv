@@ -27,7 +27,7 @@ function PLUGIN:BackendInstall(ctx)
     end
 
     -- Ensure shiv is bootstrapped
-    local shiv_path = ensure_shiv()
+    local shiv_path = ensure_shiv(tool)
 
     -- Create isolated shiv environment pointing at mise's install_path
     local shiv_env = {
@@ -65,7 +65,7 @@ function PLUGIN:BackendInstall(ctx)
         local mise_bin = find_mise()
         local quoted_mise = Shell.quote(mise_bin)
         local quoted_shiv_path = Shell.quote(shiv_path)
-        local install_cmd = env_prefix .. shiv_mise_env() .. install_lock_env(lock_owner) .. quoted_mise .. " -C " .. quoted_shiv_path ..
+        local install_cmd = env_prefix .. shiv_mise_env(tool) .. install_lock_env(lock_owner) .. quoted_mise .. " -C " .. quoted_shiv_path ..
             " exec --no-deps -- " .. quoted_mise .. " -C " .. quoted_shiv_path ..
             " run --skip-tools -q install " .. Shell.quote(tool_spec)
 
@@ -354,8 +354,9 @@ end
 
 --- Ensure the plugin's shiv clone exists and is at the pinned ref.
 --- Bootstraps via git clone if not present.
+--- @param tool string Tool being installed, excluded from nested mise calls
 --- @return string Path to the shiv clone
-function ensure_shiv()
+function ensure_shiv(tool)
     local cmd = require("cmd")
     local file = require("file")
 
@@ -445,9 +446,9 @@ function ensure_shiv()
 
     -- Trust the mise config so shiv's tasks can run
     local mise_bin = find_mise()
-    pcall(cmd.exec, shiv_mise_env() .. mise_bin .. " trust -q -C '" .. shiv_path .. "'")
+    pcall(cmd.exec, shiv_mise_env(tool) .. mise_bin .. " trust -q -C '" .. shiv_path .. "'")
 
-    local deps_ok, deps_err = pcall(install_shiv_dependencies, shiv_path, mise_bin)
+    local deps_ok, deps_err = pcall(install_shiv_dependencies, shiv_path, mise_bin, tool)
     if deps_ok then
         pcall(cmd.exec, "touch " .. Shell.quote(shiv_dependencies_marker(shiv_path)))
     end
@@ -467,9 +468,10 @@ end
 --- variables scrubbed.
 --- @param shiv_path string
 --- @param mise_bin string
-function install_shiv_dependencies(shiv_path, mise_bin)
+--- @param tool string Tool being installed, excluded from this nested install
+function install_shiv_dependencies(shiv_path, mise_bin, tool)
     local cmd = require("cmd")
-    local install_cmd = shiv_mise_env() .. mise_bin .. " install -q -C " .. Shell.quote(shiv_path)
+    local install_cmd = shiv_mise_env(tool) .. mise_bin .. " install -q -C " .. Shell.quote(shiv_path)
 
     local install_ok, install_err = pcall(cmd.exec, install_cmd)
     if install_ok then
@@ -563,9 +565,47 @@ end
 --- Points mise at mise.prod.toml (runtime-only dependencies) so dev/test
 --- tools like bats aren't installed during bootstrap. This also prevents
 --- the parent's MISE_OVERRIDE_CONFIG_FILENAMES from leaking in.
+--- @param tool? string Tool being installed, excluded from the nested call
 --- @return string
-function shiv_mise_env()
-    return "MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml "
+function shiv_mise_env(tool)
+    local prefix = "MISE_OVERRIDE_CONFIG_FILENAMES=mise.prod.toml "
+    if tool and tool ~= "" then
+        prefix = prefix .. nested_disable_tools(tool)
+    end
+    return prefix
+end
+
+--- Exclude the tool being installed from nested mise calls.
+---
+--- mise takes its own flock on a tool before calling BackendInstall, and config
+--- resolution is hierarchical: -C into the shiv clone does not shed the user's
+--- global config. Without this the nested install reads that config back, sees
+--- the tool it is already inside as missing, and blocks forever on the flock its
+--- own ancestor holds. Appending preserves an outer install's exclusions.
+--- @param tool string
+--- @return string
+function nested_disable_tools(tool)
+    local qualified = backend_prefix() .. ":" .. tool
+    local inherited = trim(os.getenv("MISE_DISABLE_TOOLS") or "")
+    if inherited ~= "" then
+        qualified = inherited .. "," .. qualified
+    end
+    return "MISE_DISABLE_TOOLS=" .. Shell.quote(qualified) .. " "
+end
+
+--- Return the backend prefix this plugin is served under.
+--- mise names the backend after the plugin directory, so a plugin installed as
+--- `shiv` answers for `shiv:<tool>` and must disable it under that same name.
+--- @return string
+function backend_prefix()
+    local ok, dir = pcall(function() return RUNTIME.pluginDirPath end)
+    if ok and dir then
+        local name = tostring(dir):match("([^/]+)/*$")
+        if name and name ~= "" then
+            return name
+        end
+    end
+    return "shiv"
 end
 
 --- Get the path to the plugin's shiv clone.
